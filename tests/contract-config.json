@@ -1,0 +1,30 @@
+{
+  "databaseModule": "server.js",
+  "appModule": "server.js",
+  "endpoints": [
+    {
+      "path": "/api/capsules"
+    },
+    {
+      "method": "post",
+      "path": "/api/capsules",
+      "status": 201,
+      "body": {
+        "title": "Contract capsule",
+        "sender": "Contract",
+        "recipient": "Future",
+        "unlockAt": "2030-01-10T00:00:00.000Z",
+        "message": "Message preserved by the API contract",
+        "passphrase": "contract-test-key",
+        "hint": "Local test",
+        "theme": "orbit"
+      }
+    },
+    {
+      "method": "post",
+      "path": "/api/capsules",
+      "status": 400,
+      "body": {}
+    }
+  ]
+}

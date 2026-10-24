@@ -1,0 +1,38 @@
+[
+  {
+    "method": "get",
+    "path": "/api/capsules",
+    "status": 200,
+    "body": [
+      {
+        "color": "string",
+        "created_at": "string",
+        "hint": "string",
+        "id": "number",
+        "locked": "boolean",
+        "recipient": "string",
+        "sender": "string",
+        "theme": "string",
+        "title": "string",
+        "unlock_at": "string"
+      }
+    ]
+  },
+  {
+    "method": "post",
+    "path": "/api/capsules",
+    "status": 201,
+    "body": {
+      "id": "number",
+      "unlockAt": "string"
+    }
+  },
+  {
+    "method": "post",
+    "path": "/api/capsules",
+    "status": 400,
+    "body": {
+      "message": "string"
+    }
+  }
+]
