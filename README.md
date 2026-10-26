@@ -1,31 +1,33 @@
-# Afterglow — Time Capsules
+# Afterglow — цифровые капсулы времени
 
-Store a password-protected message for opening after a selected date.
+Защищённое паролем сообщение, которое можно открыть после выбранной даты.
 
 
-![Desktop interface](docs/desktop.png)
 
-<img src="docs/mobile.png" width="320" alt="Mobile interface">
+![Компьютерная версия](docs/desktop.png)
 
-[Short interaction recording](docs/demo.gif)
+<img src="docs/mobile.png" width="320" alt="Мобильная версия">
 
-## Implemented
+[Короткая демонстрация](docs/demo.gif)
 
-- Create a capsule and open it using its identifier/password after the unlock time.
-- Encrypted message storage and server-side date/password validation.
+## Возможности
 
-## Stack and architecture
+- Создание капсулы, получение её идентификатора и открытие по паролю после срока.
+- Шифрование текста и серверная проверка даты и пароля.
+- Адаптивный интерфейс с фотографическим первым экраном.
 
-JavaScript, Express, Zod, built-in Node SQLite and a static HTML/CSS interface.
+## Стек и устройство
 
-## Technical mechanisms and security
+JavaScript, Express, Zod, встроенный SQLite в Node.js и HTML/CSS.
 
-- The server uses scrypt-derived keys, random salts/IVs and AES-GCM authenticated encryption. Public metadata does not contain the plaintext message.
-- Malformed JSON now returns a small JSON error without framework stack details.
+## Ключевые решения
 
-## Local setup
+- Ключи выводятся через scrypt со случайной солью; текст шифруется AES-GCM со случайным IV и проверкой целостности. Публичные метаданные не содержат открытый текст.
+- Некорректный JSON возвращает ограниченную ошибку без стека фреймворка.
 
-Node.js 24.18.0 and pnpm 11.7.0 (see version files).
+## Локальный запуск
+
+Node.js 24.18.0 и pnpm 11.7.0; версии закреплены в файлах проекта.
 
 ```bash
 npm install --global pnpm@11.7.0
@@ -33,17 +35,17 @@ pnpm install --frozen-lockfile
 pnpm start
 ```
 
-Open `http://localhost:4800`. For live UI development use `pnpm dev` where available. The API binds to `127.0.0.1` by default.
+Откройте `http://localhost:4800`. Сервер по умолчанию слушает 127.0.0.1. Для разработки доступен `pnpm dev`.
 
-## Configuration
+## Настройки
 
-Configure process environment variables using [.env.example](.env.example). `pnpm start` uses the process environment; it does not implicitly load that file. To load a copied `.env` explicitly, run `node --env-file=.env server.js`.
+Параметры перечислены в [.env.example](.env.example). `pnpm start` использует окружение процесса и не загружает файл автоматически. После копирования `.env` его можно загрузить явно: `node --env-file=.env server.js`.
 
-## Database and upgrades
+## Данные и обновления
 
-SQLite is stored at `data/afterglow.db`. Initialization creates/migrates the schema; sample rows are included for local use. Back up the database before upgrades. Do not remove the database as a migration step.
+SQLite хранится в `data/afterglow.db`. Инициализация создаёт или обновляет схему. Перед обновлением сохраните резервную копию; удалять БД вместо миграции не нужно.
 
-## Verification
+## Проверки
 
 ```bash
 pnpm test
@@ -52,17 +54,15 @@ pnpm test:upgrade
 pnpm audit --audit-level=high
 ```
 
-Unit/API tests, malformed-JSON regression, response-shape contract and prior-schema upgrade checks.
+Unit/API-проверки, обработка некорректного JSON, контракт ответа и обновление предыдущей схемы.
 
-CI installs locked dependencies and runs the configured checks; documentation checks also validate local links/images. Node dependency advisories are checked with `pnpm audit --audit-level=high`. A passing scanner only reports known advisories at the time of the run.
+CI устанавливает зависимости по зафиксированным версиям и запускает настроенные проверки. Отдельная проверка документации находит неверные локальные ссылки и изображения. Проверка уязвимостей учитывает известные проблемы на момент запуска.
 
-## Limits and next steps
+## Ограничения
 
-- Encryption is server-side, not end-to-end: the server sees the submitted password/message. There is no user-account recovery workflow.
-- No capsule-open brute-force limit is implemented; synchronous scrypt can consume CPU. Keep the default loopback binding until authentication/rate limiting is added.
+- Шифрование выполняется на сервере и не является сквозным: сервер получает пароль и сообщение. Восстановления аккаунта нет.
+- Ограничение перебора паролей не реализовано; синхронный scrypt потребляет CPU. Используйте loopback до добавления аутентификации и ограничений частоты.
 
-## Further documentation
+## Документация
 
-[Audit findings and follow-up](docs/AUDIT_2026_10.md) · [Technical reference](docs/TECHNICAL.md) · [Change history](CHANGELOG.md)
-
-[API request/response example](docs/API_EXAMPLE.md)
+[Результаты аудита](docs/AUDIT_2026_10.md) · [Техническая документация](docs/TECHNICAL.md) · [Пример запроса и ответа](docs/API_EXAMPLE.md) · [История изменений](CHANGELOG.md)
