@@ -1,3 +1,4 @@
+import { consumeBudget, initializeBudgets } from "./request-budget.js";
 import express from "express";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -149,6 +150,7 @@ export function createDb(file = resolve(root, "data", "afterglow.db")) {
     db.exec(
       "CREATE INDEX IF NOT EXISTS capsules_unlock_order ON capsules(unlock_at,id); COMMIT",
     );
+    initializeBudgets(db);
     return db;
   } catch (error) {
     if (db.isTransaction) db.exec("ROLLBACK");
@@ -219,28 +221,9 @@ export function createApp(db = createDb(), { now = Date.now } = {}) {
     next();
   });
   app.use(express.json({ limit: "32kb" }));
-  // ponytail: two bounded in-process budgets suit one local operator; a shared
-  // limiter is required before adding multiple workers or public accounts.
-  const budgets = {
-    create: { count: 0, reset: 0 },
-    open: { count: 0, reset: 0 },
-  };
   const limit = (kind, max) => (_req, res, next) => {
-    const time = now(),
-      budget = budgets[kind];
-    if (time >= budget.reset) {
-      budget.count = 0;
-      budget.reset = time + 60000;
-    }
-    if (budget.count >= max)
-      return res
-        .set(
-          "Retry-After",
-          String(Math.max(1, Math.ceil((budget.reset - time) / 1000))),
-        )
-        .status(429)
-        .json({ message: "Слишком много попыток. Повторите позже" });
-    budget.count++;
+    const budget = consumeBudget(db, kind, max, now());
+    if (!budget.allowed) return res.set('Retry-After',String(budget.retryAfter)).status(429).json({message:'Слишком много попыток. Повторите позже'});
     next();
   };
   app.param("id", (req, res, next, value) => {
