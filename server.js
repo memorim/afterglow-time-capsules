@@ -1,3 +1,5 @@
+import { purgeExpired } from "./maintenance.js";
+import { createHostedApp } from "./hosted.js";
 import { consumeBudget, initializeBudgets } from "./request-budget.js";
 import express from "express";
 import { DatabaseSync } from "node:sqlite";
@@ -196,14 +198,28 @@ const publicCapsule = (row, now) => ({
   locked: unlockTime(row) > now,
 });
 
-export function createApp(db = createDb(), { now = Date.now } = {}) {
+export function createApp(
+  db = createDb(),
+  { now = Date.now, authenticatedOrigin } = {},
+) {
   const app = express();
+  const retentionDays = Number(process.env.CAPSULE_RETENTION_DAYS || 365);
+  let lastPurge = -Infinity;
+  app.use("/api", (_req, _res, next) => {
+    const time = now();
+    if (time - lastPurge >= 3600000) {
+      purgeExpired(db, { now: time, retentionDays });
+      lastPurge = time;
+    }
+    next();
+  });
   app.use("/api", (req, res, next) => {
     if (
-      !["localhost", "127.0.0.1", "::1", "[::1]"].includes(req.hostname) ||
-      !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(
-        req.socket.remoteAddress,
-      )
+      !authenticatedOrigin &&
+      (!["localhost", "127.0.0.1", "::1", "[::1]"].includes(req.hostname) ||
+        !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(
+          req.socket.remoteAddress,
+        ))
     )
       return res
         .status(403)
@@ -212,7 +228,8 @@ export function createApp(db = createDb(), { now = Date.now } = {}) {
       !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
       (req.get("sec-fetch-site") === "cross-site" ||
         (req.get("origin") &&
-          req.get("origin") !== `${req.protocol}://${req.get("host")}`))
+          req.get("origin") !==
+            (authenticatedOrigin || `${req.protocol}://${req.get("host")}`)))
     )
       return res
         .status(403)
@@ -223,7 +240,11 @@ export function createApp(db = createDb(), { now = Date.now } = {}) {
   app.use(express.json({ limit: "32kb" }));
   const limit = (kind, max) => (_req, res, next) => {
     const budget = consumeBudget(db, kind, max, now());
-    if (!budget.allowed) return res.set('Retry-After',String(budget.retryAfter)).status(429).json({message:'Слишком много попыток. Повторите позже'});
+    if (!budget.allowed)
+      return res
+        .set("Retry-After", String(budget.retryAfter))
+        .status(429)
+        .json({ message: "Слишком много попыток. Повторите позже" });
     next();
   };
   app.param("id", (req, res, next, value) => {
@@ -334,14 +355,25 @@ export function createApp(db = createDb(), { now = Date.now } = {}) {
   return app;
 }
 if (process.env.NODE_ENV !== "test") {
-  if (
-    process.env.HOST &&
-    !["localhost", "127.0.0.1", "::1"].includes(process.env.HOST)
-  )
-    throw new Error("Afterglow requires a loopback HOST");
-  createApp().listen(
-    process.env.PORT || 4800,
-    process.env.HOST || "127.0.0.1",
-    () => console.log("Afterglow: http://localhost:4800"),
-  );
+  if (process.env.APP_ACCOUNTS) {
+    const app = createHostedApp({
+      createDb,
+      createApp,
+      origin: process.env.APP_PUBLIC_ORIGIN,
+      accounts: JSON.parse(process.env.APP_ACCOUNTS),
+      directory: resolve(root, "data", "accounts"),
+    });
+    app.listen(process.env.PORT || 4800, process.env.HOST || "127.0.0.1");
+  } else {
+    if (
+      process.env.HOST &&
+      !["localhost", "127.0.0.1", "::1"].includes(process.env.HOST)
+    )
+      throw new Error("Afterglow requires a loopback HOST");
+    createApp().listen(
+      process.env.PORT || 4800,
+      process.env.HOST || "127.0.0.1",
+      () => console.log("Afterglow: http://localhost:4800"),
+    );
+  }
 }

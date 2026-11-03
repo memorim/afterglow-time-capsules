@@ -58,10 +58,10 @@ test("opening has the same bounded passphrase length as creation", async () => {
   }
 });
 
-test("password attempts have a bounded per-process budget", async () => {
+test("password attempts share a persistent budget", async () => {
   const db = createDb(":memory:");
   try {
-    let time = Date.parse("2030-01-01T00:00:00Z");
+    let time = Date.parse("2026-07-02T00:00:00Z");
     const app = createApp(db, { now: () => time });
     let limited = false;
     for (let attempt = 0; attempt < 35; attempt++) {
