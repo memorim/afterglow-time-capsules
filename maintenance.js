@@ -1,5 +1,5 @@
 import { DatabaseSync, backup } from "node:sqlite";
-import { existsSync } from "node:fs";
+import { existsSync, openSync, closeSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 export function purgeExpired(
   db,
@@ -27,7 +27,15 @@ export async function copyDatabase(source, destination) {
       !db.prepare("SELECT name FROM sqlite_master WHERE name='capsules'").get()
     )
       throw new Error("Not an Afterglow database");
-    await backup(db, destination);
+    // Reserve the path exclusively with private permissions before SQLite opens it.
+    const fd = openSync(destination, "wx", 0o600);
+    closeSync(fd);
+    try {
+      await backup(db, destination);
+    } catch (error) {
+      unlinkSync(destination);
+      throw error;
+    }
   } finally {
     db.close();
   }
