@@ -1,0 +1,19 @@
+[Unit]
+Description=Afterglow backup and isolated restore verification
+
+[Service]
+Type=oneshot
+User=afterglow
+Group=afterglow
+WorkingDirectory=/srv/afterglow
+EnvironmentFile=/etc/afterglow-backup.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node /srv/afterglow/scripts/verified-backup.mjs ${AFTERGLOW_DATA_DIRECTORY} ${AFTERGLOW_BACKUP_DIRECTORY}
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/srv/afterglow/data /srv/afterglow-backups
+TimeoutStartSec=30min
+
