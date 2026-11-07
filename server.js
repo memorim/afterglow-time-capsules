@@ -1,3 +1,4 @@
+import { dataDirectory } from "./storage.js";
 import { purgeExpired } from "./maintenance.js";
 import { createHostedApp } from "./hosted.js";
 import { consumeBudget, initializeBudgets } from "./request-budget.js";
@@ -50,7 +51,7 @@ export function unseal(row, passphrase) {
   ]).toString("utf8");
 }
 
-export function createDb(file = resolve(root, "data", "afterglow.db")) {
+export function createDb(file = resolve(dataDirectory(), "afterglow.db")) {
   if (file !== ":memory:") mkdirSync(dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
   try {
@@ -361,7 +362,7 @@ if (process.env.NODE_ENV !== "test") {
       createApp,
       origin: process.env.APP_PUBLIC_ORIGIN,
       accounts: JSON.parse(process.env.APP_ACCOUNTS),
-      directory: resolve(root, "data", "accounts"),
+      directory: resolve(dataDirectory(), "accounts"),
     });
     app.listen(process.env.PORT || 4800, process.env.HOST || "127.0.0.1");
   } else {
