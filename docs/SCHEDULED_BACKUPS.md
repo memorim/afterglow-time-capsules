@@ -43,9 +43,13 @@ maintenance regression test separately verifies decryption with synthetic data.
 
 `CAPSULE_RETENTION_DAYS` controls expired capsule deletion, not backup lifetime.
 Keep backups outside the application directory and copy successful snapshots to
-an independently protected disk/object store. Existing snapshots are never
-automatically deleted by this command. Set an explicit retention policy in that
-storage, accounting for how long personal data remains in backup copies.
+an independently protected disk/object store. Set `AFTERGLOW_BACKUP_RETENTION_DAYS=30`
+(1–3650 days) to remove old local snapshots only after a fresh snapshot passes
+restoration. Omit it to keep all snapshots. The newest verified snapshot is kept;
+incomplete, corrupt, symlinked and unrecognised directories (including unrelated
+files) are skipped. Check skipped directories and available space. Set a matching
+explicit lifecycle policy in independent storage, accounting for how long
+personal data remains in backup copies.
 
 For an actual recovery, stop the application, use `scripts/maintenance.mjs restore`
 to create a new database, and switch the application to it only after validation.
