@@ -1,3 +1,4 @@
+import { snapshotDigest } from "./snapshot-digest.js";
 import { mkdtempSync, readFileSync, lstatSync, mkdirSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
@@ -12,11 +13,16 @@ export async function verifySnapshot(snapshot) {
   if (!lstatSync(manifestPath).isFile() || lstatSync(manifestPath).isSymbolicLink())
     throw new Error("Manifest must be a regular file");
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  if (manifest.version !== 1 || !Array.isArray(manifest.files) ||
+  if (![1, 2].includes(manifest.version) || !Array.isArray(manifest.files) ||
       !manifest.files.length || new Set(manifest.files).size !== manifest.files.length ||
       manifest.files.some(file => typeof file !== "string" ||
         !/^(afterglow\.db|accounts\/[a-f0-9]{64}\.db)$/.test(file)))
     throw new Error("Invalid snapshot manifest");
+  if (manifest.version === 2 &&
+      (!manifest.sha256 || typeof manifest.sha256 !== "object" ||
+       Object.keys(manifest.sha256).length !== manifest.files.length ||
+       manifest.files.some(file => !/^[a-f0-9]{64}$/.test(manifest.sha256[file] || ""))))
+    throw new Error("Invalid snapshot digests");
   const destination = mkdtempSync(join(tmpdir(), "afterglow-restore-check-"));
   try {
     let capsules = 0;
@@ -28,6 +34,8 @@ export async function verifySnapshot(snapshot) {
         throw new Error("Accounts must be a regular directory");
       if (!lstatSync(source).isFile() || lstatSync(source).isSymbolicLink())
         throw new Error("Database must be a regular file");
+      if (manifest.version === 2 && await snapshotDigest(source) !== manifest.sha256[file])
+        throw new Error("Snapshot content digest mismatch");
       const restoredPath = join(destination, file);
       mkdirSync(dirname(restoredPath), { recursive: true, mode: 0o700 });
       await copyDatabase(source, restoredPath);
@@ -42,3 +50,4 @@ export async function verifySnapshot(snapshot) {
     return { databases: manifest.files.length, capsules };
   } finally { rmSync(destination, { recursive: true, force: true }); }
 }
+

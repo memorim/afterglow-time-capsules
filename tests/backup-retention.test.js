@@ -53,3 +53,14 @@ test("retention is opt-in and rejects unsafe values before maintenance", async t
   assert.equal(existsSync(old), true);
   for (const value of [0, -1, "NaN", 1.5, 3651, " "]) assert.throws(() => backupRetentionDays(value));
 });
+
+
+test("valid SQLite edits are detected and cannot authorize pruning", async t => {
+  const f = await fixture(t), old = await f.snapshot(40), current = await f.snapshot(0);
+  const changed = new DatabaseSync(join(current, "afterglow.db"));
+  changed.exec("UPDATE capsules SET unlock_at='2041-01-01' WHERE id=1");
+  assert.equal(changed.prepare("PRAGMA integrity_check").get().integrity_check, "ok");
+  changed.close();
+  await assert.rejects(() => pruneSnapshots({ backupDirectory: f.backups, verifiedSnapshot: current, retentionDays: 30, now: f.now }), /digest mismatch/);
+  assert.equal(existsSync(old), true);
+});

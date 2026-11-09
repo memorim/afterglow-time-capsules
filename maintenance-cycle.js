@@ -1,3 +1,4 @@
+import { snapshotDigest } from "./snapshot-digest.js";
 import {
   mkdirSync,
   readdirSync,
@@ -39,6 +40,7 @@ export async function maintenanceCycle({
     destination = join(backups, id);
   mkdirSync(staging, { mode: 0o700 });
   let removed = 0;
+  const sha256 = {};
   try {
     for (const file of files) {
       const source = join(data, file);
@@ -54,12 +56,14 @@ export async function maintenanceCycle({
       const target = join(staging, file);
       mkdirSync(resolve(target, ".."), { recursive: true, mode: 0o700 });
       await copyDatabase(source, target);
+      sha256[file] = await snapshotDigest(target);
     }
     writeFileSync(
       join(staging, "manifest.json"),
       JSON.stringify(
         {
-          version: 1,
+          version: 2,
+          sha256,
           createdAt: new Date(now).toISOString(),
           files,
           retentionDays,
@@ -76,3 +80,4 @@ export async function maintenanceCycle({
     throw error;
   }
 }
+
