@@ -1,3 +1,4 @@
+import { createPostgresFactory } from "./postgres.js";
 import { dataDirectory } from "./storage.js";
 import { purgeExpired } from "./maintenance.js";
 import { createHostedApp } from "./hosted.js";
@@ -206,10 +207,10 @@ export function createApp(
   const app = express();
   const retentionDays = Number(process.env.CAPSULE_RETENTION_DAYS || 365);
   let lastPurge = -Infinity;
-  app.use("/api", (_req, _res, next) => {
+  app.use("/api", async (_req, _res, next) => {
     const time = now();
     if (time - lastPurge >= 3600000) {
-      purgeExpired(db, { now: time, retentionDays });
+      await (db.purgeExpired ? db.purgeExpired({ now: time, retentionDays }) : purgeExpired(db, { now: time, retentionDays }));
       lastPurge = time;
     }
     next();
@@ -239,8 +240,8 @@ export function createApp(
     next();
   });
   app.use(express.json({ limit: "32kb" }));
-  const limit = (kind, max) => (_req, res, next) => {
-    const budget = consumeBudget(db, kind, max, now());
+  const limit = (kind, max) => async (_req, res, next) => {
+    const budget = await (db.consumeBudget ? db.consumeBudget(kind, max, now()) : consumeBudget(db, kind, max, now()));
     if (!budget.allowed)
       return res
         .set("Retry-After", String(budget.retryAfter))
@@ -253,7 +254,7 @@ export function createApp(
       return res.status(400).json({ message: "Некорректный идентификатор" });
     next();
   });
-  app.get("/api/capsules", (req, res) => {
+  app.get("/api/capsules", async (req, res) => {
     const parsed = z
       .object({
         limit: z.coerce.number().int().min(1).max(100).default(100),
@@ -264,23 +265,23 @@ export function createApp(
       return res.status(400).json({ message: "Проверьте параметры списка" });
     const time = now();
     res.json(
-      db
+      (await db
         .prepare(
           "SELECT * FROM capsules ORDER BY unlock_at,id LIMIT ? OFFSET ?",
         )
-        .all(parsed.data.limit, parsed.data.offset)
+        .all(parsed.data.limit, parsed.data.offset))
         .map((row) => publicCapsule(row, time)),
     );
   });
-  app.get("/api/capsules/:id", (req, res) => {
-    const row = db
+  app.get("/api/capsules/:id", async (req, res) => {
+    const row = await db
       .prepare("SELECT * FROM capsules WHERE id=?")
       .get(Number(req.params.id));
     return row
       ? res.json(publicCapsule(row, now()))
       : res.status(404).json({ message: "Капсула не найдена" });
   });
-  app.post("/api/capsules", limit("create", 10), (req, res) => {
+  app.post("/api/capsules", limit("create", 10), async (req, res) => {
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success)
       return res.status(400).json({ message: "Проверьте данные капсулы" });
@@ -292,7 +293,7 @@ export function createApp(
         .status(400)
         .json({ message: "Дата открытия должна быть в будущем" });
     const encrypted = seal(c.message, c.passphrase);
-    const out = db
+    const out = await db
       .prepare(
         "INSERT INTO capsules(title,sender,recipient,unlock_at,theme,color,hint,ciphertext,salt,iv,tag,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
       )
@@ -312,7 +313,7 @@ export function createApp(
       );
     res.status(201).json({ id: Number(out.lastInsertRowid), unlockAt });
   });
-  app.post("/api/capsules/:id/open", limit("open", 30), (req, res) => {
+  app.post("/api/capsules/:id/open", limit("open", 30), async (req, res) => {
     const parsed = z
       .object({ passphrase: z.string().min(1).max(100) })
       .safeParse(req.body);
@@ -320,7 +321,7 @@ export function createApp(
       return res
         .status(400)
         .json({ message: "Введите пароль длиной до 100 символов" });
-    const row = db
+    const row = await db
       .prepare("SELECT * FROM capsules WHERE id=?")
       .get(Number(req.params.id));
     if (!row) return res.status(404).json({ message: "Капсула не найдена" });
@@ -357,8 +358,9 @@ export function createApp(
 }
 if (process.env.NODE_ENV !== "test") {
   if (process.env.APP_ACCOUNTS) {
+    const factory = process.env.DATABASE_URL ? createPostgresFactory(process.env.DATABASE_URL, { seedDb: createDb }) : null;
     const app = createHostedApp({
-      createDb,
+      createDb: factory ? factory.open : createDb,
       createApp,
       origin: process.env.APP_PUBLIC_ORIGIN,
       accounts: JSON.parse(process.env.APP_ACCOUNTS),
@@ -378,3 +380,4 @@ if (process.env.NODE_ENV !== "test") {
     );
   }
 }
+
