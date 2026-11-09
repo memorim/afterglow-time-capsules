@@ -36,7 +36,7 @@ export function createHostedApp({
   const applications = new Map(),
     databases = [];
   const app = express();
-  app.use((req, res, next) => {
+  app.use(async (req, res, next) => {
     res.set("Cache-Control", "no-store");
     if (req.get("host") !== parsed.host)
       return res.status(403).json({ message: "Host not allowed" });
@@ -75,16 +75,24 @@ export function createHostedApp({
         directory,
         createHash("sha256").update(user).digest("hex") + ".db",
       );
-      const db = createDb(file);
-      databases.push(db);
-      applications.set(user, createApp(db, { authenticatedOrigin: origin }));
+      const pending = Promise.resolve().then(() => createDb(file)).then((db) => {
+        databases.push(db);
+        return createApp(db, { authenticatedOrigin: origin });
+      }).catch((error) => { applications.delete(user); throw error; });
+      applications.set(user, pending);
     }
-    applications.get(user)(req, res, next);
+    (await applications.get(user))(req, res, next);
   });
-  app.closeAccounts = () => {
-    databases.forEach((db) => db.close());
+  app.use((_error, _req, res, _next) => {
+    console.error({ event: 'account_database_unavailable' });
+    res.status(503).json({ message: 'Не удалось обработать запрос' });
+  });
+  app.closeAccounts = async () => {
+    await Promise.allSettled(applications.values());
+    await Promise.all(databases.map((db) => db.close()));
     applications.clear();
     databases.length = 0;
   };
   return app;
 }
+
