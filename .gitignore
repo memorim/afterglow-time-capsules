@@ -10,3 +10,6 @@ playwright-report/
 
 .upgrade-test-*/
 _site/
+
+
+.neon-build/

@@ -54,7 +54,22 @@ CI exercises a real PostgreSQL export/restore, decrypts a recovered demo capsule
 checks identity continuation, rejects tampering and verifies that corrupted
 storage reads cannot publish a success marker.
 
-The separate free project and private bucket were created on 2026-11-09. Live
-worker deployment and scheduling are pending explicit authorization to create
-the dedicated source login and store its connection in the backup worker. No
-live backup or enabled schedule is claimed until that verification is recorded.
+Live verification completed on 2026-11-09:
+
+- The dedicated `afterglow_backup` source login can SELECT capsule rows but cannot
+  INSERT, UPDATE or DELETE them, and has no superuser, role-creation or
+  database-creation privileges.
+- Function deployment 1 in the separate free `portfolio-backups` project exported
+  one account and four encrypted capsules at 14:32:02 UTC.
+- The private object was downloaded and verified, then restored and compared in
+  temporary PostgreSQL tables. Its matching verified marker was published.
+- Snapshot: `snapshots/2026-11-09T14-32-01.411Z-7f08784aad1d119e.json.gz`
+- Size: 1515 bytes. SHA-256:
+  `7f08784aad1d119e3c4666eb769818cff8a0b00cac9b7f1a4efe95faf240fab8`.
+- The signed `afterglow-backup` trigger is enabled with `15 0 * * *`;
+  next scheduled run is 2026-11-10 00:15 UTC (03:15 Europe/Moscow).
+  The initial one-minute verification schedule was replaced by this daily schedule.
+
+The first live backup and restore comparison succeeded. A subsequent unattended
+nightly run and a recovered application's interactive login have not yet been
+observed. Source account secrets remain separately required for recovery.
