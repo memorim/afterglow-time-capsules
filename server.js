@@ -366,6 +366,7 @@ if (process.env.NODE_ENV !== "test") {
       accounts: JSON.parse(process.env.APP_ACCOUNTS),
       directory: resolve(dataDirectory(), "accounts"),
     });
+    if (factory) await app.initializeAccounts();
     app.listen(process.env.PORT || 4800, process.env.HOST || "127.0.0.1");
   } else {
     if (
