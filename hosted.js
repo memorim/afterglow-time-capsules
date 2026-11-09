@@ -35,6 +35,20 @@ export function createHostedApp({
   const hashes = new Map(entries.map(([u, h]) => [u, Buffer.from(h, "hex")]));
   const applications = new Map(),
     databases = [];
+  function applicationFor(user) {
+    if (!applications.has(user)) {
+      const file = resolve(
+        directory,
+        createHash("sha256").update(user).digest("hex") + ".db",
+      );
+      const pending = Promise.resolve().then(() => createDb(file)).then((db) => {
+        databases.push(db);
+        return createApp(db, { authenticatedOrigin: origin });
+      }).catch((error) => { applications.delete(user); throw error; });
+      applications.set(user, pending);
+    }
+    return applications.get(user);
+  }
   const app = express();
   app.use(async (req, res, next) => {
     res.set("Cache-Control", "no-store");
@@ -70,23 +84,15 @@ export function createHostedApp({
         )
         .status(401)
         .json({ message: "Authentication required" });
-    if (!applications.has(user)) {
-      const file = resolve(
-        directory,
-        createHash("sha256").update(user).digest("hex") + ".db",
-      );
-      const pending = Promise.resolve().then(() => createDb(file)).then((db) => {
-        databases.push(db);
-        return createApp(db, { authenticatedOrigin: origin });
-      }).catch((error) => { applications.delete(user); throw error; });
-      applications.set(user, pending);
-    }
-    (await applications.get(user))(req, res, next);
+    (await applicationFor(user))(req, res, next);
   });
   app.use((_error, _req, res, _next) => {
     console.error({ event: 'account_database_unavailable' });
     res.status(503).json({ message: 'Не удалось обработать запрос' });
   });
+  app.initializeAccounts = async () => {
+    for (const user of hashes.keys()) await applicationFor(user);
+  };
   app.closeAccounts = async () => {
     await Promise.allSettled(applications.values());
     await Promise.all(databases.map((db) => db.close()));

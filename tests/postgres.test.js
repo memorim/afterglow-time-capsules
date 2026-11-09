@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { createPostgresFactory, poolOptions } from '../postgres.js';
+import { createHostedApp } from '../hosted.js';
 process.env.NODE_ENV = 'test';
 const { createApp, createDb } = await import('../server.js');
 const url = process.env.POSTGRES_TEST_URL;
@@ -18,6 +19,15 @@ test('PostgreSQL persists encrypted capsules, isolates accounts and shares budge
   const account = name(), other = name();
   let factory = createPostgresFactory(url, { seedDb: createDb });
   try {
+    const password = randomUUID();
+    const user = 'verify_' + randomUUID().replaceAll('-', '');
+    const hosted = createHostedApp({ createDb: factory.open, createApp,
+      origin: 'https://example.test', directory: '/unused',
+      accounts: { [user]: createHash('sha256').update(password).digest('hex') } });
+    await hosted.initializeAccounts();
+    await request(hosted).get('/api/capsules').set('Host','example.test').expect(401);
+    await request(hosted).get('/api/capsules').set('Host','example.test').auth(user,password).expect(200);
+    await hosted.closeAccounts();
     const [db, same, isolated] = await Promise.all([factory.open(account), factory.open(account), factory.open(other)]);
     assert.equal((await db.prepare('SELECT * FROM capsules ORDER BY id').all()).length, 4);
     const start = Date.parse('2030-01-01T00:00:00Z');
