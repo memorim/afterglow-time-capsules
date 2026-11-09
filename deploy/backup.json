@@ -1,0 +1,16 @@
+{
+  "slug": "afterglowbackup",
+  "runtime": "nodejs24",
+  "project": "portfolio-backups",
+  "bucket": "afterglow-backups",
+  "access": "private",
+  "required_environment": ["SOURCE_DATABASE_URL", "NTFY_TOPIC"],
+  "trigger": {
+    "type": "schedule",
+    "name": "afterglow-backup",
+    "function_slug": "afterglowbackup",
+    "function_path": "/cron",
+    "schedule": {"cron": "15 0 * * *"},
+    "enabled": true
+  }
+}
