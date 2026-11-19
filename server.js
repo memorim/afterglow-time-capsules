@@ -17,6 +17,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { z } from "zod";
+import { chainHash, releaseRound } from "./public/capsule-time.js";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const hex = (value) => Buffer.from(value).toString("hex");
@@ -198,6 +199,24 @@ const colors = {
   winter: "#8eb5c9",
   city: "#df8067",
 };
+const sealedSchema = createSchema.omit({ message: true, passphrase: true }).extend({
+  sealed: z.object({
+    ciphertext: z.string().max(24576),
+    salt: z.string().regex(/^[a-f0-9]{32}$/),
+    iv: z.string().regex(/^[a-f0-9]{24}$/),
+  }).strict(),
+}).strict();
+const timelockTag = "drand-quicknet-v1";
+
+function validSealedRound(ciphertext, unlockAt) {
+  const armor = /^-----BEGIN AGE ENCRYPTED FILE-----\n([A-Za-z0-9+/=\n]+)\n-----END AGE ENCRYPTED FILE-----\n?$/.exec(ciphertext);
+  if (!armor) return false;
+  const age = Buffer.from(armor[1], "base64").toString("latin1");
+  const end = age.indexOf("\n--- ");
+  if (end < 0 || !age.startsWith("age-encryption.org/v1\n")) return false;
+  const recipients = age.slice(0, end).split("\n").filter(line => line.startsWith("-> "));
+  return recipients.length === 1 && recipients[0] === `-> tlock ${releaseRound(unlockAt)} ${chainHash}`;
+}
 function unlockTime(row) {
   // Only bundled legacy rows lack an offset; interpret those consistently as UTC.
   const value = String(row.unlock_at),
@@ -217,6 +236,7 @@ const publicCapsule = (row, now) => ({
   hint: row.hint,
   created_at: row.created_at,
   locked: unlockTime(row) > now,
+  ...(row.tag === timelockTag ? { encryption: timelockTag } : {}),
 });
 
 export function createApp(
@@ -300,8 +320,15 @@ export function createApp(
       ? res.json(publicCapsule(row, now()))
       : res.status(404).json({ message: "Капсула не найдена" });
   });
+  app.get("/api/capsules/:id/envelope", async (req, res) => {
+    const row = await db.prepare("SELECT * FROM capsules WHERE id=?").get(Number(req.params.id));
+    if (row?.tag !== timelockTag)
+      return res.status(404).json({ message: "Зашифрованная капсула не найдена" });
+    const { ciphertext, salt, iv } = row;
+    res.json({ ciphertext, salt, iv });
+  });
   app.post("/api/capsules", limit("create", 10), async (req, res) => {
-    const parsed = createSchema.safeParse(req.body);
+    const parsed = (req.body?.sealed === undefined ? createSchema : sealedSchema).safeParse(req.body);
     if (!parsed.success)
       return res.status(400).json({ message: "Проверьте данные капсулы" });
     const c = parsed.data,
@@ -311,7 +338,11 @@ export function createApp(
       return res
         .status(400)
         .json({ message: "Дата открытия должна быть в будущем" });
-    const encrypted = await sealFromRequest(c.message, c.passphrase);
+    if (c.sealed && !validSealedRound(c.sealed.ciphertext, unlockAt))
+      return res.status(400).json({ message: "Число раунда шифрования не соответствует дате открытия" });
+    const encrypted = c.sealed
+      ? { ...c.sealed, tag: timelockTag }
+      : await sealFromRequest(c.message, c.passphrase);
     const out = await db
       .prepare(
         "INSERT INTO capsules(title,sender,recipient,unlock_at,theme,color,hint,ciphertext,salt,iv,tag,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -344,6 +375,8 @@ export function createApp(
       .prepare("SELECT * FROM capsules WHERE id=?")
       .get(Number(req.params.id));
     if (!row) return res.status(404).json({ message: "Капсула не найдена" });
+    if (row.tag === timelockTag)
+      return res.status(400).json({ message: "Откройте эту капсулу в браузере" });
     const time = now();
     if (unlockTime(row) > time)
       return res

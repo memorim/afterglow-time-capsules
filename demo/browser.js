@@ -46,6 +46,16 @@
   globalThis.PORTFOLIO_DEMO = true;
 
   const vault = new Map();
+  const storageKey = "afterglow-encrypted-vault-v1";
+  let saved = [];
+  try {
+    saved = JSON.parse(localStorage.getItem(storageKey) || "[]");
+    if (!Array.isArray(saved)) saved = [];
+  } catch {}
+  for (const { capsule, envelope } of saved) {
+    state["/api/capsules"].push(capsule);
+    vault.set(capsule.id, envelope);
+  }
   async function keyFor(password, salt) {
     const material = await crypto.subtle.importKey(
       "raw",
@@ -71,6 +81,25 @@
         })),
       );
     if (url.pathname === "/api/capsules" && method === "POST") {
+      if (body.sealed) {
+        if (!Number.isFinite(Date.parse(body.unlockAt)) || Date.parse(body.unlockAt) <= Date.now())
+          fail("Выберите будущую дату");
+        const id = Math.max(0, ...state["/api/capsules"].map(capsule => capsule.id)) + 1;
+        const capsule = {
+          id, title: text(body.title, 3, 80), sender: text(body.sender, 2, 50),
+          recipient: text(body.recipient, 2, 50), hint: body.hint || "",
+          unlock_at: body.unlockAt, theme: "orbit", color: "#9684d8", locked: true,
+          encryption: "drand-quicknet-v1",
+        };
+        const envelope = body.sealed;
+        const next = [...saved, { capsule, envelope }];
+        try { localStorage.setItem(storageKey, JSON.stringify(next)); }
+        catch { fail("Не удалось сохранить капсулу в хранилище браузера", 503); }
+        saved = next;
+        state["/api/capsules"].push(capsule);
+        vault.set(id, envelope);
+        return json({ id }, 201);
+      }
       const title = text(body.title, 2, 100),
         message = text(body.message, 1, 5000),
         sender = text(body.sender, 2, 80),
@@ -103,6 +132,13 @@
         locked: true,
       });
       return json({ id }, 201);
+    }
+    const envelopePath = url.pathname.match(/^\/api\/capsules\/(\d+)\/envelope$/);
+    if (envelopePath && method === "GET") {
+      const id = Number(envelopePath[1]);
+      const capsule = state["/api/capsules"].find(item => item.id === id);
+      if (capsule?.encryption !== "drand-quicknet-v1") fail("Капсула не найдена", 404);
+      return json(vault.get(id));
     }
     const match = url.pathname.match(/^\/api\/capsules\/(\d+)\/open$/);
     if (match && method === "POST") {
