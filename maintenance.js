@@ -1,6 +1,12 @@
 import { DatabaseSync, backup } from "node:sqlite";
 import { existsSync, openSync, closeSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
+export function configuredRetentionDays(value = process.env.CAPSULE_RETENTION_DAYS ?? "0") {
+  const days = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isInteger(days) || days < 0 || days > 3650)
+    throw new Error("CAPSULE_RETENTION_DAYS must be 0–3650");
+  return days;
+}
 export function purgeExpired(
   db,
   { now = Date.now(), retentionDays = 365 } = {},

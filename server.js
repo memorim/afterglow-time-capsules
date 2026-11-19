@@ -1,12 +1,13 @@
 import { createPostgresFactory } from "./postgres.js";
 import { dataDirectory } from "./storage.js";
-import { purgeExpired } from "./maintenance.js";
+import { configuredRetentionDays, purgeExpired } from "./maintenance.js";
 import { createHostedApp } from "./hosted.js";
 import { consumeBudget, initializeBudgets } from "./request-budget.js";
 import express from "express";
 import { DatabaseSync } from "node:sqlite";
 import {
   randomBytes,
+  scrypt,
   scryptSync,
   createCipheriv,
   createDecipheriv,
@@ -14,17 +15,29 @@ import {
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { z } from "zod";
+import { chainHash, releaseRound } from "./public/capsule-time.js";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const hex = (value) => Buffer.from(value).toString("hex");
 // Keep the original Node defaults explicit so stored capsules remain decryptable.
 const kdf = { N: 16384, r: 8, p: 1, maxmem: 32 * 1024 * 1024 };
+const deriveKey = promisify(scrypt);
 
 export function seal(message, passphrase) {
   const salt = randomBytes(16),
     iv = randomBytes(12);
-  const key = scryptSync(passphrase, salt, 32, kdf);
+  return sealWithKey(message, salt, iv, scryptSync(passphrase, salt, 32, kdf));
+}
+
+async function sealFromRequest(message, passphrase) {
+  const salt = randomBytes(16),
+    iv = randomBytes(12);
+  return sealWithKey(message, salt, iv, await deriveKey(passphrase, salt, 32, kdf));
+}
+
+function sealWithKey(message, salt, iv, key) {
   const cipher = createCipheriv("aes-256-gcm", key, iv);
   const ciphertext = Buffer.concat([
     cipher.update(message, "utf8"),
@@ -39,7 +52,14 @@ export function seal(message, passphrase) {
 }
 
 export function unseal(row, passphrase) {
-  const key = scryptSync(passphrase, Buffer.from(row.salt, "hex"), 32, kdf);
+  return unsealWithKey(row, scryptSync(passphrase, Buffer.from(row.salt, "hex"), 32, kdf));
+}
+
+async function unsealFromRequest(row, passphrase) {
+  return unsealWithKey(row, await deriveKey(passphrase, Buffer.from(row.salt, "hex"), 32, kdf));
+}
+
+function unsealWithKey(row, key) {
   const decipher = createDecipheriv(
     "aes-256-gcm",
     key,
@@ -179,6 +199,24 @@ const colors = {
   winter: "#8eb5c9",
   city: "#df8067",
 };
+const sealedSchema = createSchema.omit({ message: true, passphrase: true }).extend({
+  sealed: z.object({
+    ciphertext: z.string().max(900000),
+    salt: z.string().regex(/^[a-f0-9]{32}$/),
+    iv: z.string().regex(/^[a-f0-9]{24}$/),
+  }).strict(),
+}).strict();
+const timelockTag = "drand-quicknet-v1";
+
+function validSealedRound(ciphertext, unlockAt) {
+  const armor = /^-----BEGIN AGE ENCRYPTED FILE-----\n([A-Za-z0-9+/=\n]+)\n-----END AGE ENCRYPTED FILE-----\n?$/.exec(ciphertext);
+  if (!armor) return false;
+  const age = Buffer.from(armor[1], "base64").toString("latin1");
+  const end = age.indexOf("\n--- ");
+  if (end < 0 || !age.startsWith("age-encryption.org/v1\n")) return false;
+  const recipients = age.slice(0, end).split("\n").filter(line => line.startsWith("-> "));
+  return recipients.length === 1 && recipients[0] === `-> tlock ${releaseRound(unlockAt)} ${chainHash}`;
+}
 function unlockTime(row) {
   // Only bundled legacy rows lack an offset; interpret those consistently as UTC.
   const value = String(row.unlock_at),
@@ -198,18 +236,28 @@ const publicCapsule = (row, now) => ({
   hint: row.hint,
   created_at: row.created_at,
   locked: unlockTime(row) > now,
+  ...(row.tag === timelockTag ? { encryption: timelockTag } : {}),
 });
 
 export function createApp(
   db = createDb(),
-  { now = Date.now, authenticatedOrigin } = {},
+  { now = Date.now, authenticatedOrigin, allowLegacyCreation = true } = {},
 ) {
   const app = express();
-  const retentionDays = Number(process.env.CAPSULE_RETENTION_DAYS || 365);
+  const retentionDays = configuredRetentionDays();
+  const configuredBudget = (name, fallback) => {
+    const value = process.env[name];
+    if (value === undefined) return fallback;
+    if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) > 1000000)
+      throw new Error(name + " must be 0–1000000");
+    return Number(value);
+  };
+  const createBudget = configuredBudget("AFTERGLOW_CREATE_PER_MINUTE", 10);
+  const openBudget = configuredBudget("AFTERGLOW_OPEN_PER_MINUTE", 30);
   let lastPurge = -Infinity;
   app.use("/api", async (_req, _res, next) => {
     const time = now();
-    if (time - lastPurge >= 3600000) {
+    if (retentionDays && time - lastPurge >= 3600000) {
       await (db.purgeExpired ? db.purgeExpired({ now: time, retentionDays }) : purgeExpired(db, { now: time, retentionDays }));
       lastPurge = time;
     }
@@ -239,8 +287,10 @@ export function createApp(
     res.set("Cache-Control", "no-store");
     next();
   });
+  app.use(express.json({ type: "application/vnd.afterglow.sealed+json", limit: "1mb" }));
   app.use(express.json({ limit: "32kb" }));
   const limit = (kind, max) => async (_req, res, next) => {
+    if (max === 0) return next();
     const budget = await (db.consumeBudget ? db.consumeBudget(kind, max, now()) : consumeBudget(db, kind, max, now()));
     if (!budget.allowed)
       return res
@@ -281,8 +331,21 @@ export function createApp(
       ? res.json(publicCapsule(row, now()))
       : res.status(404).json({ message: "Капсула не найдена" });
   });
-  app.post("/api/capsules", limit("create", 10), async (req, res) => {
-    const parsed = createSchema.safeParse(req.body);
+  app.get("/api/capsules/:id/envelope", async (req, res) => {
+    const row = await db.prepare("SELECT * FROM capsules WHERE id=?").get(Number(req.params.id));
+    if (!row) return res.status(404).json({ message: "Капсула не найдена" });
+    const { ciphertext, salt, iv } = row;
+    if (row.tag !== timelockTag) {
+      if (unlockTime(row) > now())
+        return res.status(423).json({ message: "Капсула ещё запечатана" });
+      return res.json({ ciphertext, salt, iv, tag: row.tag });
+    }
+    res.json({ ciphertext, salt, iv });
+  });
+  app.post("/api/capsules", limit("create", createBudget), async (req, res) => {
+    if (req.body?.sealed === undefined && !allowLegacyCreation)
+      return res.status(400).json({ message: "Зашифруйте капсулу перед отправкой" });
+    const parsed = (req.body?.sealed === undefined ? createSchema : sealedSchema).safeParse(req.body);
     if (!parsed.success)
       return res.status(400).json({ message: "Проверьте данные капсулы" });
     const c = parsed.data,
@@ -292,7 +355,11 @@ export function createApp(
       return res
         .status(400)
         .json({ message: "Дата открытия должна быть в будущем" });
-    const encrypted = seal(c.message, c.passphrase);
+    if (c.sealed && !validSealedRound(c.sealed.ciphertext, unlockAt))
+      return res.status(400).json({ message: "Число раунда шифрования не соответствует дате открытия" });
+    const encrypted = c.sealed
+      ? { ...c.sealed, tag: timelockTag }
+      : await sealFromRequest(c.message, c.passphrase);
     const out = await db
       .prepare(
         "INSERT INTO capsules(title,sender,recipient,unlock_at,theme,color,hint,ciphertext,salt,iv,tag,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -313,7 +380,7 @@ export function createApp(
       );
     res.status(201).json({ id: Number(out.lastInsertRowid), unlockAt });
   });
-  app.post("/api/capsules/:id/open", limit("open", 30), async (req, res) => {
+  app.post("/api/capsules/:id/open", limit("open", openBudget), async (req, res) => {
     const parsed = z
       .object({ passphrase: z.string().min(1).max(100) })
       .safeParse(req.body);
@@ -325,6 +392,8 @@ export function createApp(
       .prepare("SELECT * FROM capsules WHERE id=?")
       .get(Number(req.params.id));
     if (!row) return res.status(404).json({ message: "Капсула не найдена" });
+    if (row.tag === timelockTag)
+      return res.status(400).json({ message: "Откройте эту капсулу в браузере" });
     const time = now();
     if (unlockTime(row) > time)
       return res
@@ -332,7 +401,7 @@ export function createApp(
         .json({ message: "Капсула ещё запечатана", unlockAt: row.unlock_at });
     try {
       return res.json({
-        message: unseal(row, parsed.data.passphrase),
+        message: await unsealFromRequest(row, parsed.data.passphrase),
         openedAt: new Date(time).toISOString(),
       });
     } catch {
@@ -357,13 +426,15 @@ export function createApp(
   return app;
 }
 if (process.env.NODE_ENV !== "test") {
-  if (process.env.APP_ACCOUNTS) {
+  const allowLegacyCreation = process.env.AFTERGLOW_ALLOW_LEGACY_CREATION === "1";
+  if (process.env.APP_ACCOUNTS || process.env.AFTERGLOW_SIGNUP_SECRET) {
     const factory = process.env.DATABASE_URL ? createPostgresFactory(process.env.DATABASE_URL, { seedDb: createDb }) : null;
     const app = createHostedApp({
       createDb: factory ? factory.open : createDb,
-      createApp,
+      createApp: (db, options) => createApp(db, { ...options, allowLegacyCreation }),
       origin: process.env.APP_PUBLIC_ORIGIN,
-      accounts: JSON.parse(process.env.APP_ACCOUNTS),
+      accounts: JSON.parse(process.env.APP_ACCOUNTS || "{}"),
+      signupSecret: process.env.AFTERGLOW_SIGNUP_SECRET,
       directory: resolve(dataDirectory(), "accounts"),
     });
     if (factory) await app.initializeAccounts();
@@ -374,7 +445,7 @@ if (process.env.NODE_ENV !== "test") {
       !["localhost", "127.0.0.1", "::1"].includes(process.env.HOST)
     )
       throw new Error("Afterglow requires a loopback HOST");
-    createApp().listen(
+    createApp(undefined, { allowLegacyCreation }).listen(
       process.env.PORT || 4800,
       process.env.HOST || "127.0.0.1",
       () => console.log("Afterglow: http://localhost:4800"),

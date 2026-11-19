@@ -15,3 +15,26 @@ test('failed form submission retains entered data',async({page})=>{
  await form.locator('button').last().click();await expect(form.getByRole('alert')).toContainText('Не удалось выполнить запрос');
  await expect(form.locator('[name="sender"]')).toHaveValue(values["sender"]);
 });
+
+test('browser encrypts the capsule before submitting it', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('.create').first().click();
+  const form = page.locator('#create-form');
+  const message = 'Only the encrypted envelope should leave the browser.';
+  const passphrase = 'browser-only test password';
+  for (const [name, value] of Object.entries({
+    sender: 'Browser', recipient: 'Future reader', title: 'Private browser capsule',
+    message, passphrase,
+  })) await form.locator('[name="' + name + '"]').fill(value);
+  const sent = page.waitForResponse(response => response.url().endsWith('/api/capsules') &&
+    response.request().method() === 'POST');
+  await form.locator('button').last().click();
+  const response = await sent;
+  expect(response.status()).toBe(201);
+  const data = response.request().postDataJSON();
+  expect(data.sealed.ciphertext).toMatch(/^-----BEGIN AGE ENCRYPTED FILE-----/);
+  expect(JSON.stringify(data)).not.toContain(message);
+  expect(JSON.stringify(data)).not.toContain('Private browser capsule');
+  expect(JSON.stringify(data)).not.toContain(passphrase);
+  await expect(page.locator('.create-status')).toContainText('зашифрована');
+});

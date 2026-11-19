@@ -46,12 +46,14 @@ export async function maintenanceCycle({
       const source = join(data, file);
       if (!lstatSync(source).isFile() || lstatSync(source).isSymbolicLink())
         throw new Error("Database must be a regular file");
-      const db = new DatabaseSync(source, { open: true });
-      try {
-        db.exec("PRAGMA busy_timeout=5000");
-        removed += purgeExpired(db, { retentionDays, now });
-      } finally {
-        db.close();
+      if (retentionDays !== 0) {
+        const db = new DatabaseSync(source, { open: true });
+        try {
+          db.exec("PRAGMA busy_timeout=5000");
+          removed += purgeExpired(db, { retentionDays, now });
+        } finally {
+          db.close();
+        }
       }
       const target = join(staging, file);
       mkdirSync(resolve(target, ".."), { recursive: true, mode: 0o700 });

@@ -63,3 +63,28 @@ test("hosted accounts require credentials and isolate stored records", async () 
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("self-service credentials persist across instances and cannot access another account", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "afterglow-self-service-"));
+  const settings = {
+    createDb, createApp, origin: "https://glow.example",
+    directory, signupSecret: "test-only account signing key 123456789",
+  };
+  const first = createHostedApp(settings);
+  const second = createHostedApp(settings);
+  try {
+    const signup = () => request(first).post("/api/accounts/register").set("Host", "glow.example");
+    const alice = await signup(), bob = await signup();
+    assert.equal(alice.status, 201);
+    assert.equal(bob.status, 201);
+    assert.notEqual(alice.body.username, bob.body.username);
+    const call = (client, username, password) => request(client).get("/api/capsules")
+      .set("Host", "glow.example").auth(username, password);
+    assert.equal((await call(second, alice.body.username, alice.body.password)).status, 200);
+    assert.equal((await call(second, alice.body.username, bob.body.password)).status, 401);
+  } finally {
+    await first.closeAccounts();
+    await second.closeAccounts();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
