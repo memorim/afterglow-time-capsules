@@ -38,3 +38,6 @@ dialog label { font-size: 0.875rem; }
 @media screen and (min-width: 801px) {
   html { --page-zoom: 1.5; zoom: var(--page-zoom); }
 }
+
+.metadata-option { display: flex; align-items: center; gap: .55rem; }
+.revealed { white-space: pre-wrap; overflow-wrap: anywhere; }

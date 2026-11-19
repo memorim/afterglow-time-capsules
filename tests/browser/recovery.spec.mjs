@@ -34,6 +34,7 @@ test('browser encrypts the capsule before submitting it', async ({ page }) => {
   const data = response.request().postDataJSON();
   expect(data.sealed.ciphertext).toMatch(/^-----BEGIN AGE ENCRYPTED FILE-----/);
   expect(JSON.stringify(data)).not.toContain(message);
+  expect(JSON.stringify(data)).not.toContain('Private browser capsule');
   expect(JSON.stringify(data)).not.toContain(passphrase);
   await expect(page.locator('.create-status')).toContainText('зашифрована');
 });

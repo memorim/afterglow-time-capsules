@@ -23,6 +23,7 @@ document.querySelector('#capsule-count').textContent=String(capsules.length).pad
 function openCapsule(id){const c=capsules.find(x=>x.id===id);if(c.locked)return;const dialog=document.querySelector('.open-dialog');document.querySelector('[name=id]').value=id;document.querySelector('#open-title').textContent=c.title;document.querySelector('#open-hint').textContent=c.hint;document.querySelector('.revealed').classList.remove('show');document.querySelector('.revealed').textContent='';document.querySelector('.error').textContent='';dialog.showModal()}
 document.querySelectorAll('.close').forEach(b=>b.onclick=()=>b.closest('dialog').close());document.querySelector('.create').onclick=()=>document.querySelector('.create-dialog').showModal();
 const capsuleCrypto = () => import('./vendor/capsule-crypto.js');
+const metadataMarker = '\0afterglow-metadata-v1\n';
 document.querySelector('#open-form').onsubmit = async event => {
   event.preventDefault();
   const data = new FormData(event.target);
@@ -60,6 +61,12 @@ document.querySelector('#open-form').onsubmit = async event => {
     }
     message = out.message;
   }
+  if (message.startsWith(metadataMarker)) {
+    const privateData = JSON.parse(message.slice(metadataMarker.length));
+    document.querySelector('#open-title').textContent = privateData.title;
+    document.querySelector('#open-hint').textContent = privateData.sender + ' → ' + privateData.recipient;
+    message = privateData.message + (privateData.hint ? '\n\nПодсказка: ' + privateData.hint : '');
+  }
   revealed.textContent = message;
   revealed.classList.add('show');
 };
@@ -81,7 +88,13 @@ document.querySelector('#create-form').onsubmit = async event => {
     document.querySelector('.create-status').textContent = 'Напишите сообщение длиной от 10 символов.';
     return;
   }
-  payload.sealed = await encryptCapsule(message, data.get('passphrase'), payload.unlockAt);
+  let content = message;
+  if (data.has('privateMetadata')) {
+    const { title, sender, recipient, hint } = payload;
+    content = metadataMarker + JSON.stringify({ title, sender, recipient, hint, message });
+    Object.assign(payload, { title: 'Запечатанная капсула', sender: 'Скрыто', recipient: 'Скрыто', hint: '' });
+  }
+  payload.sealed = await encryptCapsule(content, data.get('passphrase'), payload.unlockAt);
   const response = await fetch('/api/capsules', {
     method: 'POST',
     headers: { 'Content-Type': 'application/vnd.afterglow.sealed+json' },
