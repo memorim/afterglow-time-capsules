@@ -2,12 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import request from 'supertest';
 import { defaultChainInfo } from 'tlock-js';
-import { encryptCapsule, decryptCapsule } from '../capsule-crypto.js';
+import { encryptCapsule, decryptCapsule, decryptLegacyCapsule } from '../capsule-crypto.js';
 
 process.env.NODE_ENV = 'test';
-const { createDb, createApp } = await import('../server.js');
+const { createDb, createApp, seal } = await import('../server.js');
 const password = 'E2E regression passphrase';
 const message = 'This message stays inside the encrypted browser envelope.';
+
+test('browser can decrypt a legacy capsule without posting a password', async () => {
+  assert.equal(await decryptLegacyCapsule(seal(message, password), password), message);
+});
 
 test('encrypted capsules store an envelope bound to the future drand round', async () => {
   const db = createDb(':memory:');

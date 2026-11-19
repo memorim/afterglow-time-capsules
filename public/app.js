@@ -2,7 +2,24 @@ const loadFeedback=document.createElement('p');loadFeedback.className='load-feed
 async function load(...args){lastLoadArgs=args;loadFeedback.hidden=false;loadFeedback.textContent='Загрузка данных…';try{await loadData(...args);loadFeedback.textContent='';loadFeedback.hidden=true;}catch(error){loadFeedback.textContent='Не удалось загрузить данные. ';const retry=document.createElement('button');retry.type='button';retry.textContent='Повторить загрузку';retry.onclick=()=>load(...lastLoadArgs);loadFeedback.append(retry);}}
 const escapeText=v=>String(v).replace(/[&<>"\']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "\'":"&#39;"}[c]));
 let capsules=[];const now=()=>new Date();const date=v=>new Date(v).toLocaleDateString('ru-RU',{day:'numeric',month:'long',year:'numeric'});const days=v=>Math.max(0,Math.ceil((new Date(v)-now())/86400000));
-async function loadData(){capsules=await fetch('/api/capsules').then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json()});document.querySelector('#capsule-count').textContent=String(capsules.length).padStart(2,'0');document.querySelector('#capsule-grid').innerHTML=capsules.map((c,i)=>`<article class="capsule-card ${c.locked?'locked':''}" style="--color:${c.color}" data-id="${c.id}"><div class="capsule-top"><span>${String(i+1).padStart(2,'0')} / ${c.theme.toUpperCase()}</span><span>${c.locked?'SEALED':'READY'}</span></div><div class="capsule-glyph">${c.locked?'◌':'✦'}</div><h3>${escapeText(c.title)}</h3><p>${escapeText(c.sender)} → ${escapeText(c.recipient)}</p><div class="capsule-foot"><span>${c.locked?`Ещё ${days(c.unlock_at)} дн.`:date(c.unlock_at)}</span><button ${c.locked?'disabled':''}>${c.locked?'Запечатано':'Открыть →'}</button></div></article>`).join('');document.querySelectorAll('.capsule-card').forEach(card=>card.onclick=()=>openCapsule(Number(card.dataset.id)))}
+const more = document.createElement('button');
+more.type = 'button';
+more.textContent = 'Показать ещё капсулы';
+more.hidden = true;
+document.querySelector('#capsule-grid').after(more);
+more.onclick = async () => {
+  more.disabled = true;
+  try { await load(true); } finally { more.disabled = false; }
+};
+async function loadData(append = false) {
+ const offset = append ? capsules.length : 0;
+ const page = await fetch('/api/capsules?offset=' + offset).then(r => {
+   if (!r.ok) throw new Error('HTTP ' + r.status);
+   return r.json();
+ });
+ capsules = append ? [...capsules, ...page] : page;
+ more.hidden = page.length < 100;
+document.querySelector('#capsule-count').textContent=String(capsules.length).padStart(2,'0');document.querySelector('#capsule-grid').innerHTML=capsules.map((c,i)=>`<article class="capsule-card ${c.locked?'locked':''}" style="--color:${c.color}" data-id="${c.id}"><div class="capsule-top"><span>${String(i+1).padStart(2,'0')} / ${c.theme.toUpperCase()}</span><span>${c.locked?'SEALED':'READY'}</span></div><div class="capsule-glyph">${c.locked?'◌':'✦'}</div><h3>${escapeText(c.title)}</h3><p>${escapeText(c.sender)} → ${escapeText(c.recipient)}</p><div class="capsule-foot"><span>${c.locked?`Ещё ${days(c.unlock_at)} дн.`:date(c.unlock_at)}</span><button ${c.locked?'disabled':''}>${c.locked?'Запечатано':'Открыть →'}</button></div></article>`).join('');document.querySelectorAll('.capsule-card').forEach(card=>card.onclick=()=>openCapsule(Number(card.dataset.id)))}
 function openCapsule(id){const c=capsules.find(x=>x.id===id);if(c.locked)return;const dialog=document.querySelector('.open-dialog');document.querySelector('[name=id]').value=id;document.querySelector('#open-title').textContent=c.title;document.querySelector('#open-hint').textContent=c.hint;document.querySelector('.revealed').classList.remove('show');document.querySelector('.revealed').textContent='';document.querySelector('.error').textContent='';dialog.showModal()}
 document.querySelectorAll('.close').forEach(b=>b.onclick=()=>b.closest('dialog').close());document.querySelector('.create').onclick=()=>document.querySelector('.create-dialog').showModal();
 const capsuleCrypto = () => import('./vendor/capsule-crypto.js');
@@ -16,12 +33,15 @@ document.querySelector('#open-form').onsubmit = async event => {
   const revealed = document.querySelector('.revealed');
   error.textContent = '';
   let message;
-  if (capsule?.encryption === 'drand-quicknet-v1') {
+  if (!globalThis.PORTFOLIO_DEMO || capsule?.encryption === 'drand-quicknet-v1') {
     const response = await fetch(`/api/capsules/${id}/envelope`);
     if (!response.ok) throw new Error('Envelope unavailable');
-    const { decryptCapsule } = await capsuleCrypto();
+    const { decryptCapsule, decryptLegacyCapsule } = await capsuleCrypto();
     try {
-      message = await decryptCapsule(await response.json(), passphrase);
+      const envelope = await response.json();
+      message = capsule?.encryption === 'drand-quicknet-v1'
+        ? await decryptCapsule(envelope, passphrase)
+        : await decryptLegacyCapsule(envelope, passphrase);
     } catch (failure) {
       if (failure.name !== 'OperationError') throw failure;
       error.textContent = 'Пароль не подходит';
@@ -56,10 +76,15 @@ document.querySelector('#create-form').onsubmit = async event => {
     theme: 'orbit',
   };
   const { encryptCapsule } = await capsuleCrypto();
-  payload.sealed = await encryptCapsule(data.get('message'), data.get('passphrase'), payload.unlockAt);
+  const message = data.get('message').trim();
+  if (message.length < 10) {
+    document.querySelector('.create-status').textContent = 'Напишите сообщение длиной от 10 символов.';
+    return;
+  }
+  payload.sealed = await encryptCapsule(message, data.get('passphrase'), payload.unlockAt);
   const response = await fetch('/api/capsules', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/vnd.afterglow.sealed+json' },
     body: JSON.stringify(payload),
   });
   const out = await response.json();

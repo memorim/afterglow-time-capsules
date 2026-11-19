@@ -1,5 +1,6 @@
 import { Buffer, defaultChainInfo, mainnetClient, timelockDecrypt, timelockEncrypt } from 'tlock-js';
 import { releaseRound } from './public/capsule-time.js';
+import { scryptAsync } from '@noble/hashes/scrypt';
 
 const toHex = bytes => Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
 const fromHex = value => Uint8Array.from(value.match(/../g), byte => parseInt(byte, 16));
@@ -32,6 +33,19 @@ export async function decryptCapsule(envelope, password, client = mainnetClient(
   const key = await passwordKey(password, fromHex(envelope.salt));
   const clear = await crypto.subtle.decrypt(
     { name: 'AES-GCM', iv: fromHex(envelope.iv) }, key, new Uint8Array(inner),
+  );
+  return new TextDecoder().decode(clear);
+}
+
+export async function decryptLegacyCapsule(envelope, password) {
+  const salt = fromHex(envelope.salt);
+  const material = await scryptAsync(encoder.encode(password), salt, {
+    N: 16384, r: 8, p: 1, dkLen: 32,
+  });
+  const key = await crypto.subtle.importKey('raw', material, 'AES-GCM', false, ['decrypt']);
+  const clear = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: fromHex(envelope.iv) }, key,
+    fromHex(envelope.ciphertext + envelope.tag),
   );
   return new TextDecoder().decode(clear);
 }

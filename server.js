@@ -201,7 +201,7 @@ const colors = {
 };
 const sealedSchema = createSchema.omit({ message: true, passphrase: true }).extend({
   sealed: z.object({
-    ciphertext: z.string().max(24576),
+    ciphertext: z.string().max(900000),
     salt: z.string().regex(/^[a-f0-9]{32}$/),
     iv: z.string().regex(/^[a-f0-9]{24}$/),
   }).strict(),
@@ -241,10 +241,19 @@ const publicCapsule = (row, now) => ({
 
 export function createApp(
   db = createDb(),
-  { now = Date.now, authenticatedOrigin } = {},
+  { now = Date.now, authenticatedOrigin, allowLegacyCreation = true } = {},
 ) {
   const app = express();
   const retentionDays = configuredRetentionDays();
+  const configuredBudget = (name, fallback) => {
+    const value = process.env[name];
+    if (value === undefined) return fallback;
+    if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) > 1000000)
+      throw new Error(name + " must be 0–1000000");
+    return Number(value);
+  };
+  const createBudget = configuredBudget("AFTERGLOW_CREATE_PER_MINUTE", 10);
+  const openBudget = configuredBudget("AFTERGLOW_OPEN_PER_MINUTE", 30);
   let lastPurge = -Infinity;
   app.use("/api", async (_req, _res, next) => {
     const time = now();
@@ -278,8 +287,10 @@ export function createApp(
     res.set("Cache-Control", "no-store");
     next();
   });
+  app.use(express.json({ type: "application/vnd.afterglow.sealed+json", limit: "1mb" }));
   app.use(express.json({ limit: "32kb" }));
   const limit = (kind, max) => async (_req, res, next) => {
+    if (max === 0) return next();
     const budget = await (db.consumeBudget ? db.consumeBudget(kind, max, now()) : consumeBudget(db, kind, max, now()));
     if (!budget.allowed)
       return res
@@ -322,12 +333,18 @@ export function createApp(
   });
   app.get("/api/capsules/:id/envelope", async (req, res) => {
     const row = await db.prepare("SELECT * FROM capsules WHERE id=?").get(Number(req.params.id));
-    if (row?.tag !== timelockTag)
-      return res.status(404).json({ message: "Зашифрованная капсула не найдена" });
+    if (!row) return res.status(404).json({ message: "Капсула не найдена" });
     const { ciphertext, salt, iv } = row;
+    if (row.tag !== timelockTag) {
+      if (unlockTime(row) > now())
+        return res.status(423).json({ message: "Капсула ещё запечатана" });
+      return res.json({ ciphertext, salt, iv, tag: row.tag });
+    }
     res.json({ ciphertext, salt, iv });
   });
-  app.post("/api/capsules", limit("create", 10), async (req, res) => {
+  app.post("/api/capsules", limit("create", createBudget), async (req, res) => {
+    if (req.body?.sealed === undefined && !allowLegacyCreation)
+      return res.status(400).json({ message: "Зашифруйте капсулу перед отправкой" });
     const parsed = (req.body?.sealed === undefined ? createSchema : sealedSchema).safeParse(req.body);
     if (!parsed.success)
       return res.status(400).json({ message: "Проверьте данные капсулы" });
@@ -363,7 +380,7 @@ export function createApp(
       );
     res.status(201).json({ id: Number(out.lastInsertRowid), unlockAt });
   });
-  app.post("/api/capsules/:id/open", limit("open", 30), async (req, res) => {
+  app.post("/api/capsules/:id/open", limit("open", openBudget), async (req, res) => {
     const parsed = z
       .object({ passphrase: z.string().min(1).max(100) })
       .safeParse(req.body);
@@ -409,11 +426,12 @@ export function createApp(
   return app;
 }
 if (process.env.NODE_ENV !== "test") {
+  const allowLegacyCreation = process.env.AFTERGLOW_ALLOW_LEGACY_CREATION === "1";
   if (process.env.APP_ACCOUNTS || process.env.AFTERGLOW_SIGNUP_SECRET) {
     const factory = process.env.DATABASE_URL ? createPostgresFactory(process.env.DATABASE_URL, { seedDb: createDb }) : null;
     const app = createHostedApp({
       createDb: factory ? factory.open : createDb,
-      createApp,
+      createApp: (db, options) => createApp(db, { ...options, allowLegacyCreation }),
       origin: process.env.APP_PUBLIC_ORIGIN,
       accounts: JSON.parse(process.env.APP_ACCOUNTS || "{}"),
       signupSecret: process.env.AFTERGLOW_SIGNUP_SECRET,
@@ -427,7 +445,7 @@ if (process.env.NODE_ENV !== "test") {
       !["localhost", "127.0.0.1", "::1"].includes(process.env.HOST)
     )
       throw new Error("Afterglow requires a loopback HOST");
-    createApp().listen(
+    createApp(undefined, { allowLegacyCreation }).listen(
       process.env.PORT || 4800,
       process.env.HOST || "127.0.0.1",
       () => console.log("Afterglow: http://localhost:4800"),

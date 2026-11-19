@@ -75,7 +75,7 @@
   async function handle(url, method, body) {
     if (url.pathname === "/api/capsules" && method === "GET")
       return json(
-        state["/api/capsules"].map((x) => ({
+        state["/api/capsules"].slice(Number(url.searchParams.get("offset") || 0), Number(url.searchParams.get("offset") || 0) + 100).map((x) => ({
           ...x,
           locked: Date.parse(x.unlock_at) > Date.now(),
         })),
