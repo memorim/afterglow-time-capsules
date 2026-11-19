@@ -1,6 +1,6 @@
 import { createPostgresFactory } from "./postgres.js";
 import { dataDirectory } from "./storage.js";
-import { purgeExpired } from "./maintenance.js";
+import { configuredRetentionDays, purgeExpired } from "./maintenance.js";
 import { createHostedApp } from "./hosted.js";
 import { consumeBudget, initializeBudgets } from "./request-budget.js";
 import express from "express";
@@ -244,11 +244,11 @@ export function createApp(
   { now = Date.now, authenticatedOrigin } = {},
 ) {
   const app = express();
-  const retentionDays = Number(process.env.CAPSULE_RETENTION_DAYS || 365);
+  const retentionDays = configuredRetentionDays();
   let lastPurge = -Infinity;
   app.use("/api", async (_req, _res, next) => {
     const time = now();
-    if (time - lastPurge >= 3600000) {
+    if (retentionDays && time - lastPurge >= 3600000) {
       await (db.purgeExpired ? db.purgeExpired({ now: time, retentionDays }) : purgeExpired(db, { now: time, retentionDays }));
       lastPurge = time;
     }
@@ -409,13 +409,14 @@ export function createApp(
   return app;
 }
 if (process.env.NODE_ENV !== "test") {
-  if (process.env.APP_ACCOUNTS) {
+  if (process.env.APP_ACCOUNTS || process.env.AFTERGLOW_SIGNUP_SECRET) {
     const factory = process.env.DATABASE_URL ? createPostgresFactory(process.env.DATABASE_URL, { seedDb: createDb }) : null;
     const app = createHostedApp({
       createDb: factory ? factory.open : createDb,
       createApp,
       origin: process.env.APP_PUBLIC_ORIGIN,
-      accounts: JSON.parse(process.env.APP_ACCOUNTS),
+      accounts: JSON.parse(process.env.APP_ACCOUNTS || "{}"),
+      signupSecret: process.env.AFTERGLOW_SIGNUP_SECRET,
       directory: resolve(dataDirectory(), "accounts"),
     });
     if (factory) await app.initializeAccounts();

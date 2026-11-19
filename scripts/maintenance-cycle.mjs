@@ -1,4 +1,5 @@
 import { maintenanceCycle } from "../maintenance-cycle.js";
+import { configuredRetentionDays } from "../maintenance.js";
 const [dataDirectory, backupDirectory] = process.argv.slice(2);
 if (!dataDirectory || !backupDirectory)
   throw new Error(
@@ -7,6 +8,6 @@ if (!dataDirectory || !backupDirectory)
 const result = await maintenanceCycle({
   dataDirectory,
   backupDirectory,
-  retentionDays: Number(process.env.CAPSULE_RETENTION_DAYS || 365),
+  retentionDays: configuredRetentionDays(),
 });
 console.log(JSON.stringify({ status: "ok", ...result }));
