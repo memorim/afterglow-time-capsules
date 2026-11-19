@@ -7,6 +7,7 @@ import express from "express";
 import { DatabaseSync } from "node:sqlite";
 import {
   randomBytes,
+  scrypt,
   scryptSync,
   createCipheriv,
   createDecipheriv,
@@ -14,17 +15,28 @@ import {
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { z } from "zod";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const hex = (value) => Buffer.from(value).toString("hex");
 // Keep the original Node defaults explicit so stored capsules remain decryptable.
 const kdf = { N: 16384, r: 8, p: 1, maxmem: 32 * 1024 * 1024 };
+const deriveKey = promisify(scrypt);
 
 export function seal(message, passphrase) {
   const salt = randomBytes(16),
     iv = randomBytes(12);
-  const key = scryptSync(passphrase, salt, 32, kdf);
+  return sealWithKey(message, salt, iv, scryptSync(passphrase, salt, 32, kdf));
+}
+
+async function sealFromRequest(message, passphrase) {
+  const salt = randomBytes(16),
+    iv = randomBytes(12);
+  return sealWithKey(message, salt, iv, await deriveKey(passphrase, salt, 32, kdf));
+}
+
+function sealWithKey(message, salt, iv, key) {
   const cipher = createCipheriv("aes-256-gcm", key, iv);
   const ciphertext = Buffer.concat([
     cipher.update(message, "utf8"),
@@ -39,7 +51,14 @@ export function seal(message, passphrase) {
 }
 
 export function unseal(row, passphrase) {
-  const key = scryptSync(passphrase, Buffer.from(row.salt, "hex"), 32, kdf);
+  return unsealWithKey(row, scryptSync(passphrase, Buffer.from(row.salt, "hex"), 32, kdf));
+}
+
+async function unsealFromRequest(row, passphrase) {
+  return unsealWithKey(row, await deriveKey(passphrase, Buffer.from(row.salt, "hex"), 32, kdf));
+}
+
+function unsealWithKey(row, key) {
   const decipher = createDecipheriv(
     "aes-256-gcm",
     key,
@@ -292,7 +311,7 @@ export function createApp(
       return res
         .status(400)
         .json({ message: "Дата открытия должна быть в будущем" });
-    const encrypted = seal(c.message, c.passphrase);
+    const encrypted = await sealFromRequest(c.message, c.passphrase);
     const out = await db
       .prepare(
         "INSERT INTO capsules(title,sender,recipient,unlock_at,theme,color,hint,ciphertext,salt,iv,tag,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -332,7 +351,7 @@ export function createApp(
         .json({ message: "Капсула ещё запечатана", unlockAt: row.unlock_at });
     try {
       return res.json({
-        message: unseal(row, parsed.data.passphrase),
+        message: await unsealFromRequest(row, parsed.data.passphrase),
         openedAt: new Date(time).toISOString(),
       });
     } catch {
